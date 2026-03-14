@@ -1,0 +1,5 @@
+dns0.ccsu.edu.cn
+dns5.ccsu.edu.cn
+dns1.ccsu.edu.cn
+dns3.ccsu.edu.cn
+dns4.ccsu.edu.cn

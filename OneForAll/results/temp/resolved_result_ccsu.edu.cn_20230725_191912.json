@@ -1,0 +1,5 @@
+{"name":"dns1.ccsu.edu.cn.","type":"A","class":"IN","status":"NOERROR","data":{"answers":[{"ttl":300,"type":"A","class":"IN","name":"dns1.ccsu.edu.cn.","data":"42.48.30.3"}]},"resolver":"176.103.130.130:53"}
+{"name":"dns3.ccsu.edu.cn.","type":"A","class":"IN","status":"NOERROR","data":{"answers":[{"ttl":300,"type":"A","class":"IN","name":"dns3.ccsu.edu.cn.","data":"42.48.30.3"}]},"resolver":"208.67.222.222:53"}
+{"name":"dns4.ccsu.edu.cn.","type":"A","class":"IN","status":"NOERROR","data":{"answers":[{"ttl":300,"type":"A","class":"IN","name":"dns4.ccsu.edu.cn.","data":"42.48.30.3"}]},"resolver":"8.8.4.4:53"}
+{"name":"dns0.ccsu.edu.cn.","type":"A","class":"IN","status":"NOERROR","data":{"answers":[{"ttl":300,"type":"A","class":"IN","name":"dns0.ccsu.edu.cn.","data":"42.48.30.3"}]},"resolver":"4.2.2.1:53"}
+{"name":"dns5.ccsu.edu.cn.","type":"A","class":"IN","status":"NOERROR","data":{"answers":[{"ttl":300,"type":"A","class":"IN","name":"dns5.ccsu.edu.cn.","data":"42.48.30.3"}]},"resolver":"4.2.2.4:53"}

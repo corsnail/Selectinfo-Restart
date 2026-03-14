@@ -1,0 +1,1 @@
+{"name":"api-web.lixiang.com.","type":"A","class":"IN","status":"NOERROR","data":{"answers":[{"ttl":600,"type":"CNAME","class":"IN","name":"api-web.lixiang.com.","data":"api-web.lixiang.com.783.baidu-itm.com."},{"ttl":60,"type":"A","class":"IN","name":"api-web.lixiang.com.783.baidu-itm.com.","data":"106.13.245.10"}]},"resolver":"208.67.220.220:53"}
