@@ -1,0 +1,53 @@
+1. 引入 AI 的具体切入点
+A. 智能编排层 (Agentic Workflow)
+应用位置： run.py 逻辑升级。
+技术方案： 放弃硬编码的顺序执行。
+
+痛点： 不同的目标（如大型企业 vs 单一 IP）需要的扫描策略不同。全量开启工具会导致速度慢且易被封。
+
+AI 功能： 引入 Planning Agent。根据输入的目标特征（如资产规模、CDN 占比、WAF 强度），自动决定调用哪些工具。
+
+示例： 检测到目标有严格防火墙，Agent 自动降低 ksubdomain 并发，并优先使用被动收集工具 subfinder。
+
+B. 资产清洗与威胁研判 (LLM Processing)
+应用位置： 在 deduplicate.py 和 filterWildcardDomains.py 之后。
+技术方案： 使用轻量级本地模型（如 Llama 3 或 Qwen）或 API。
+
+痛点： 收集到几千个子域名，人工看不过来，且很多是无意义的负载均衡域名。
+
+AI 功能： 智能权重评估。通过 LLM 分析域名含义、页面标题和 JS 内容，自动识别出“高价值资产”（如 admin-*、dev-test、api-v1），并为后续 Nuclei 扫描分配优先级。
+
+C. 漏洞探测指令生成 (Prompt-to-Tool)
+应用位置： Nuclei 模块集成。
+技术方案： 语义化扫描请求。
+
+AI 功能： 当 Agent 发现某个 JS 文件中包含特殊的 API 结构时，自动调用 LLM 生成针对性的 Nuclei 自定义模板 (YAML) 或编写专属的 Python 验证脚本。
+
+2. 引入 MCP (Model Context Protocol) 提升扩展性
+MCP 是 Anthropic 推出的标准，旨在让 AI 模型更方便地调用外部工具。
+
+实现方案： 将你的核心工具（OneForAll, Nuclei 等）封装成 MCP Servers。
+
+优势： 你的 selectinf 不再是一个死板的脚本，而是一个“安全工具池”。你可以直接接入如 Claude 或 ChatGPT，告诉它：“帮我分析这个域名并尝试 Getshell”，AI 就能通过 MCP 协议直接调用你框架里的 subfinder 或 sqlmap。
+
+3. README 修改建议（增加 AI 模块）
+建议在 🧩 整体架构与工作流程 之后，新增一个 🤖 AI 驱动模块 (SelectInf-AI) 章节：
+
+🤖 AI 自动化增强 (SelectInf-AI)
+本框架引入了 AI Agent 编排机制，将传统的“线性流水线”升级为“反馈式决策链”：
+
+智能任务分发 (Strategic Agent)：
+
+利用 LLM 预估目标受攻击面，动态调整 massdns 速率与探测深度。
+
+资产指纹语义分析 (Semantic Analysis)：
+
+通过自然语言处理，对 JSFinder 提取的 API 接口进行分类。识别出潜在的敏感敏感接口（如敏感目录、未授权访问点），实现比正则匹配更精准的资产过滤。
+
+MCP 协议集成 (Planned)：
+
+构建 Security MCP Server，允许 LLM 直接调用框架内的扫描组件，实现“对话即扫描”。
+
+漏洞优先级排序 (Risk Scoring)：
+
+AI 根据收集到的中间数据（标题、Headers、目录结构）自动计算风险评分，优先对高分资产执行 nuclei 深度扫描。
