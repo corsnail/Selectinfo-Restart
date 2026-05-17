@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from typing import Any, Dict, List, Optional
 
 from selectinf import get_logger
@@ -87,7 +88,9 @@ class FingerprintStage(PipelineStage):
         # 4. Build httpx command
         output_file = os.path.join(work_path, "httpx_output.json")
         port_csv = ",".join(str(p) for p in ports)
-        binary = os.path.join("tools", "httpx", "httpx.exe")
+        # Platform-aware binary path (Windows .exe vs Unix no suffix)
+        binary_name = "httpx.exe" if sys.platform.startswith("win") else "httpx"
+        binary = os.path.join("tools", "httpx", binary_name)
 
         cmd: List[str] = [
             binary,

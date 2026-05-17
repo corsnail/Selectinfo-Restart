@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Integration tests for PipelineOrchestrator (Phase 2 C8)."""
 
+import json
 import os
 import sys
 import sqlite3
@@ -175,6 +176,60 @@ class TestOrchestratorIntegration:
         output_dir = mock_config.output_dir
         expected_domain = os.path.join(output_dir, "domain_example.com.txt")
         assert os.path.exists(expected_domain), f"Expected output file missing: {expected_domain}"
+
+    def test_collect_to_fingerprint_chain(self, clean_db, temp_dirs):
+        """CollectStage output_path must be consumable by FingerprintStage."""
+        work_dir, output_dir = temp_dirs
+        cfg = PipelineConfig(
+            collect={
+                "subfinder": ToolConfig(enabled=True, timeout=5, retries=0),
+                "amass": ToolConfig(enabled=True, timeout=5, retries=0),
+                "oneforall": ToolConfig(enabled=True, timeout=5, retries=0),
+                "massdns": ToolConfig(enabled=True, timeout=5, retries=0),
+                "ksubdomain": ToolConfig(enabled=True, timeout=5, retries=0),
+                "jsfinder": ToolConfig(enabled=True, timeout=5, retries=0, extra={"max_iterations": 1}),
+            },
+            fingerprint={
+                "httpx": ToolConfig(
+                    enabled=True, timeout=10, retries=0,
+                    extra={"ports": [80, 443], "threads": 20, "tech_detect": True, "follow_redirects": True}
+                )
+            },
+            vulnscan={},
+            ai={},
+            concurrency=2,
+            work_dir=work_dir,
+            output_dir=output_dir,
+        )
+
+        def mock_httpx(cmd, description, timeout=10, cwd=None, env=None, retries=0):
+            from selectinf.core.tool_runner import ToolResult
+            try:
+                out_idx = cmd.index("-o") + 1
+                out_path = cmd[out_idx]
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                fake = {"url": "http://sub1.example.com", "status_code": 200, "webserver": "nginx", "tech": ["nginx"]}
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(fake) + "\n")
+            except ValueError:
+                pass
+            return ToolResult(success=True, stdout="", stderr="", exit_code=0, elapsed=0.1)
+
+        with patch("selectinf.pipeline.orchestrator.load_config", return_value=cfg), \
+             patch("selectinf.stages.collect.run_tool", side_effect=self._mock_tool), \
+             patch("selectinf.stages.collect.run_pipe_tool", side_effect=self._mock_pipe_tool), \
+             patch("selectinf.stages.fingerprint.run_tool", side_effect=mock_httpx):
+            orch = PipelineOrchestrator()
+            result = orch.run("example.com")
+
+        collect_result = result["results"]["collect"]
+        fingerprint_result = result["results"]["fingerprint"]
+
+        # CollectStage output must be a file path
+        assert os.path.exists(collect_result["output_path"]), "CollectStage output_path must exist"
+        # FingerprintStage must process it successfully
+        assert fingerprint_result["status"] == "success", f"FingerprintStage failed: {fingerprint_result.get('errors')}"
+        assert fingerprint_result["items_output"] > 0, "FingerprintStage should produce fingerprints"
 
 
 if __name__ == "__main__":
