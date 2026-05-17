@@ -1,0 +1,89 @@
+# ── 全局设置 ─────────────────────────
+pipeline:
+  concurrency: 4              # 全局最大并发数
+  work_dir: "work"            # 每任务的临时目录
+  output_dir: "output"        # 最终结果目录
+  stages:
+    collect: true
+    fingerprint: true
+    vulnscan: true
+    ai_analysis: true
+
+# ── Stage 1: 资产收集 ──────────────
+collect:
+  tools:
+    subfinder:
+      enabled: true
+      timeout: 300
+      retries: 1
+      extra_args: ["-silent", "-all"]
+    amass:
+      enabled: true
+      timeout: 600
+      retries: 1
+      extra_args: ["-v", "-src", "-ip", "-brute", "-active"]
+    oneforall:
+      enabled: true
+      timeout: 900
+      retries: 1
+    massdns:
+      enabled: true
+      timeout: 300
+      retries: 1
+      names_file: "tools/massdns/lists/names.txt"
+      resolvers_file: "tools/massdns/lists/resolvers.txt"
+    ksubdomain:
+      enabled: true
+      timeout: 300
+      retries: 1
+      extra_args: ["-b", "20M"]
+    jsfinder:
+      enabled: true
+      timeout: 600
+      retries: 1
+      max_iterations: 5       # JSFinder 最大迭代次数
+
+# ── Stage 2: 指纹识别 ──────────────
+fingerprint:
+  httpx:
+    enabled: true
+    timeout: 30
+    retries: 2
+    ports: [80, 443, 8080, 8443]
+    tech_detect: true
+    follow_redirects: true
+    threads: 20               # httpx 内部并发
+  port_scan:
+    enabled: false            # 可选: 自定义端口扫描
+    ports: [22, 3306, 6379]
+
+# ── Stage 3: 漏洞扫描 ──────────────
+vulnscan:
+  nuclei:
+    enabled: true
+    timeout: 1800
+    retries: 1
+    templates_dir: "nuclei-templates"
+    severity_filter: ["critical", "high", "medium"]  # 排除 low/info
+    rate_limit: 50            # 每秒请求数
+    threads: 10
+    bulk_size: 100            # 每批目标数量
+
+# ── Stage 4: AI 分析 ───────────────
+ai:
+  provider: "openai"          # openai | ollama
+  openai:
+    api_key_env: "OPENAI_API_KEY"
+    model: "gpt-4o"
+    temperature: 0.3
+    max_tokens: 4096
+  ollama:
+    base_url: "http://localhost:11434"
+    model: "llama3"
+  fp_validation:
+    enabled: true
+    threshold: 0.7            # 置信度低于此值标记为疑似误报
+  report:
+    format: "markdown"        # markdown | json | html
+    include_remediation: true
+    language: "zh-CN"

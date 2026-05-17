@@ -216,6 +216,73 @@ class AIAnalysisStage(PipelineStage):
         # 写入 ai_analysis 表 + report.md
 ```
 
+### 3.3 Stage 中间文件管理规范（新增）
+
+为保持项目根目录整洁并支持多任务并行，所有阶段中间产物统一隔离到 `work/{task_id}/` 目录。
+
+#### 3.3.1 目录结构约定
+
+```
+work/
+  └── {task_id}/
+        ├── subfinder.txt        ← 工具原始输出
+        ├── amass.txt
+        ├── massdns.txt
+        ├── ksubdomain.txt
+        ├── {domain}.txt          ← 合并后的域名列表
+        ├── subdomain.txt         ← JSFinder 中间产物
+        ├── url.txt               ← URL 转换中间产物
+        └── nuclei_targets.txt    ← VulnScan 阶段生成
+output/
+  └── domain_{domain}.txt       ← 最终产物（ARL/MySQL 导出来源）
+  └── {domain}.csv
+```
+
+#### 3.3.2 文件生命周期
+
+| 阶段 | 文件 | 创建者 | 消费者 | 清理时机 |
+|------|------|--------|--------|----------|
+| Collect | `subfinder.txt` | `subfinder_scan()` | `extract_domains.py` | `extract_all_domains()` 执行后删除 |
+| Collect | `amass.txt` | `amass_scan()` | `extract_domains.py` | 同上 |
+| Collect | `massdns.txt` | `massdns_scan()` | `extract_domains.py` | 同上 |
+| Collect | `ksubdomain.txt` | `ksubdomain_scan()` | `extract_domains.py` | 同上 |
+| Collect | `{domain}.txt` | `extract_all_domains()` | JSFinder loop, dedup, url_converter | 最终合并为 `domain_{domain}.txt` 后删除 |
+| Collect | `subdomain.txt` | JSFinder | dedup, url_converter | 每轮迭代后合并删除 |
+| Collect | `url.txt` | JSFinder / url_converter | 最终输出 | 合并后删除 |
+| Fingerprint | `httpx_input.txt` | CollectStage | FingerprintStage | FingerprintStage 执行后保留或删除（配置决定） |
+| VulnScan | `nuclei_targets.txt` | FingerprintStage | VulnScanStage | VulnScanStage 执行后删除 |
+
+#### 3.3.3 Orchestrator 职责
+
+```python
+# PipelineOrchestrator.run() 伪代码
+work_dir = os.path.join(config.work_dir, str(task_id))
+os.makedirs(work_dir, exist_ok=True)
+
+try:
+    for stage in stages:
+        stage.execute(task_id, work_dir)
+finally:
+    if not config.keep_work_dir:
+        shutil.rmtree(work_dir, ignore_errors=True)
+```
+
+- **默认行为**：流水线完成后自动清理 `work/{task_id}/`
+- **调试模式**：`pipeline_config.yaml` 增加 `keep_work_dir: true` 保留中间文件
+- **Backward compat**：`run.py` 在改为薄包装层之前，仍使用根目录；`CollectStage` 首次实现即采用 `work_dir` 模式
+
+#### 3.3.4 现有脚本适配
+
+`extract_domains.py`、`deduplicate.py`、`url_converter.py` 等脚本当前使用硬编码根目录路径。Phase 2 重构时统一改为接受 `work_dir` 参数：
+
+```python
+def extract_domain_subfinder(url, work_dir="."):
+    ksubdomain_path = os.path.join(work_dir, "ksubdomain.txt")
+    ...
+```
+
+**注意**：OneForAll 的 CSV 输出路径由 OneForAll 自身决定（`engines/OneForAll/results/{domain}.csv`），不在 `work_dir` 管理范围内。`extract_domain_OneForAll()` 读取后应立即删除。
+
 ---
 
 ## 4. 数据模型规范
@@ -798,8 +865,8 @@ def main():
 
 | # | 任务 | 描述 | 依赖 | 工时 | 验收标准 |
 |---|------|------|------|------|----------|
-| 6 | Collect Stage | 将现有扫描逻辑封装为 `CollectStage` | 2, 3 | 3h | 产出与现有 run.py 一致 |
-| 7 | Pipeline Orchestrator | 实现 stage 调度 + task FSM | 2, 6 | 3h | 可执行 collect 阶段 |
+| 6 | Collect Stage | 将现有扫描逻辑封装为 `CollectStage`；**所有工具中间输出写入 `work/{task_id}/` 而非根目录** | 2, 3 | 3h | 产出与现有 run.py 一致，根目录无残留 .txt |
+| 7 | Pipeline Orchestrator | 实现 stage 调度 + task FSM；**运行时创建 `work/{task_id}/`，完成后自动清理** | 2, 6 | 3h | 可执行 collect 阶段 |
 | 8 | 集成测试: Collect | 用已知域名验证 collect 阶段完整流程 | 6, 7 | 2h | 数据库中有 correct assets |
 
 ### Phase 3: Fingerprint Stage (1-2 天)
@@ -923,10 +990,15 @@ run.py                     # 入口 (薄包装)
 
 ### 12.2 迁移 Checklist
 
-- [ ] `pipeline_config.yaml` 创建并验证
-- [ ] SQLite WAL 模式启用
-- [ ] 每阶段 `execute()` 通过独立测试
-- [ ] 端到端测试: `python -m selectinf` 全流程
-- [ ] 现有 `final_results` 数据不被破坏
-- [ ] ARL 导出 + MySQL 导入仍可用
+- [x] `pipeline_config.yaml` 创建并验证
+- [x] SQLite WAL 模式启用
+- [x] Phase 1: 基础设施 (config, tool_runner, SQLite schema, entities, ABC stubs)
+- [x] Phase 2: Collect Stage (`selectinf/stages/collect.py`) — 工具中间输出写入 `work/{task_id}/`
+- [x] Phase 2: Pipeline Orchestrator (`selectinf/pipeline/orchestrator.py`) — stage 调度 + FSM + work_dir 生命周期
+- [x] Phase 2: 集成测试 (`tests/test_collect_stage.py`, `tests/test_orchestrator.py`) — 12/12 pass
+- [x] Phase 2: 向后兼容 — `final_results` / `module_results` 表仍写入，ARL/MySQL 导出未改动
+- [ ] Phase 3: Fingerprint Stage (`httpx` 集成)
+- [ ] Phase 4: VulnScan Stage (`nuclei` 集成)
+- [ ] Phase 5: AI Analysis Stage (LLM client + prompts)
+- [ ] Phase 6: `run.py` 薄包装层 + 端到端验证
 - [ ] README 更新四阶段说明

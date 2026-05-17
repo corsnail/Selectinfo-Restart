@@ -1,3 +1,4 @@
+import os
 import requests
 from bs4 import BeautifulSoup
 from selectinf import get_logger
@@ -5,7 +6,7 @@ from selectinf import get_logger
 logger = get_logger("collect.dnsgrep")
 
 
-def get_unique_domains(url):
+def get_unique_domains(url, work_dir="."):
     # 自动补全 scheme
     if '://' not in url:
         url = 'https://' + url
@@ -39,7 +40,7 @@ def get_unique_domains(url):
         logger.error("[dnsgrep] DNS HTML 解析失败: %s", e)
         return
 
-    file_name = f"{domain_name}.txt"
+    file_name = os.path.join(work_dir, f"{domain_name}.txt")
 
     unique_domains = set()
 

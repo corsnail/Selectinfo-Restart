@@ -12,6 +12,8 @@ def get_db():
     """获取 SQLite 数据库连接"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -78,6 +80,94 @@ def init_db():
             FOREIGN KEY (task_id) REFERENCES task (id)
         )
     """)
+
+    # 为已存在的 task 表添加新字段（兼容重复初始化）
+    try:
+        cursor.execute("ALTER TABLE task ADD COLUMN total_fingerprints INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # 字段已存在
+    try:
+        cursor.execute("ALTER TABLE task ADD COLUMN total_vulns INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # 字段已存在
+
+    # 资产表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            domain TEXT NOT NULL,
+            resolved_ip TEXT,
+            source_module TEXT NOT NULL,
+            first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(task_id, domain, source_module)
+        )
+    """)
+
+    # 指纹表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS fingerprints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            ip TEXT,
+            port INTEGER DEFAULT 443,
+            status_code INTEGER,
+            title TEXT,
+            content_type TEXT,
+            server_header TEXT,
+            tech_stack TEXT,
+            waf_detected TEXT,
+            response_time_ms INTEGER,
+            first_scanned TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            fingerprint_id_fingerprint TEXT,
+            UNIQUE(task_id, url, port)
+        )
+    """)
+
+    # 漏洞表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS vulnerabilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            vuln_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            template TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            cvss_score REAL,
+            description TEXT,
+            matched_at TEXT,
+            extracted_results TEXT,
+            nuclei_output_json TEXT,
+            ai_validated INTEGER DEFAULT NULL,
+            ai_confidence REAL DEFAULT NULL,
+            first_detected TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(task_id, vuln_id, url, template)
+        )
+    """)
+
+    # AI 分析表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ai_analysis (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            analysis_type TEXT NOT NULL,
+            input_data TEXT,
+            model_used TEXT,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            result_text TEXT,
+            cost_usd REAL DEFAULT 0.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (task_id) REFERENCES task (id)
+        )
+    """)
+
+    # 索引
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_assets_task ON assets(task_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_fingerprints_task ON fingerprints(task_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_vulns_task_severity ON vulnerabilities(task_id, severity)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_ai_analysis_task ON ai_analysis(task_id)")
 
     conn.commit()
     conn.close()
@@ -179,3 +269,106 @@ def get_task_summary(task_id: int) -> dict:
         "modules": {row["module_name"]: row["domain_count"] for row in modules},
         "total_unique_domains": total_domains
     }
+
+
+def save_asset(task_id: int, domain: str, resolved_ip: str = None, source_module: str = ""):
+    """保存资产"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR IGNORE INTO assets (task_id, domain, resolved_ip, source_module) VALUES (?, ?, ?, ?)",
+        (task_id, domain, resolved_ip, source_module)
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_fingerprint(task_id: int, url: str, ip: str = None, port: int = 443,
+                     status_code: int = None, title: str = None, content_type: str = None,
+                     server_header: str = None, tech_stack: str = None, waf_detected: str = None,
+                     response_time_ms: int = None, fingerprint_id: str = None):
+    """保存指纹"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT OR IGNORE INTO fingerprints
+           (task_id, url, ip, port, status_code, title, content_type, server_header,
+            tech_stack, waf_detected, response_time_ms, fingerprint_id_fingerprint)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (task_id, url, ip, port, status_code, title, content_type, server_header,
+         tech_stack, waf_detected, response_time_ms, fingerprint_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_vulnerability(task_id: int, vuln_id: str, url: str, template: str,
+                        severity: str, cvss_score: float = None, description: str = None,
+                        matched_at: str = None, extracted_results: str = None,
+                        nuclei_output_json: str = None):
+    """保存漏洞"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT OR IGNORE INTO vulnerabilities
+           (task_id, vuln_id, url, template, severity, cvss_score, description,
+            matched_at, extracted_results, nuclei_output_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (task_id, vuln_id, url, template, severity, cvss_score, description,
+         matched_at, extracted_results, nuclei_output_json)
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_ai_analysis(task_id: int, analysis_type: str, input_data: str = None,
+                      model_used: str = None, prompt_tokens: int = None,
+                      completion_tokens: int = None, result_text: str = None,
+                      cost_usd: float = 0.0):
+    """保存 AI 分析结果"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO ai_analysis
+           (task_id, analysis_type, input_data, model_used, prompt_tokens,
+            completion_tokens, result_text, cost_usd)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (task_id, analysis_type, input_data, model_used, prompt_tokens,
+         completion_tokens, result_text, cost_usd)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_assets(task_id: int) -> list:
+    """获取资产列表"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM assets WHERE task_id = ?", (task_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_fingerprints(task_id: int) -> list:
+    """获取指纹列表"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM fingerprints WHERE task_id = ?", (task_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_vulnerabilities(task_id: int, severity: str = None) -> list:
+    """获取漏洞列表"""
+    conn = get_db()
+    cursor = conn.cursor()
+    if severity:
+        cursor.execute("SELECT * FROM vulnerabilities WHERE task_id = ? AND severity = ?",
+                       (task_id, severity))
+    else:
+        cursor.execute("SELECT * FROM vulnerabilities WHERE task_id = ?", (task_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

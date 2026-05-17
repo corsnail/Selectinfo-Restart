@@ -16,6 +16,7 @@ from selectinf.output.sqlite_manager import (
     init_db, create_task, finish_task, save_module_result,
     save_final_domain, get_task_summary
 )
+from selectinf.core.tool_runner import run_tool, run_pipe_tool
 
 logger = get_logger("run")
 
@@ -37,65 +38,26 @@ def sanitize_target(url: str) -> str:
 
 
 def _run_cmd(args, description="command", timeout=300, shell=False, cwd=None, env=None):
-    """Run a subprocess safely with logging, timing, and detailed error context."""
-    import time
-    cmd_str = " ".join(args) if isinstance(args, list) else args
-    logger.debug("[%s] 执行: %s", description, cmd_str)
-    start = time.time()
-    try:
-        result = subprocess.run(
-            args,
-            shell=shell,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            cwd=cwd,
-            env=env,
-        )
-        elapsed = time.time() - start
-        # 输出完整 stdout/stderr（不截断）
-        stdout_full = result.stdout.strip() if result.stdout else ""
-        stderr_full = result.stderr.strip() if result.stderr else ""
+    """Run a subprocess via the unified tool_runner interface (backward-compatible wrapper)."""
+    result = run_tool(
+        cmd=args,
+        description=description,
+        timeout=timeout,
+        cwd=cwd,
+        env=env,
+        retries=1,
+    )
+    if result is None:
+        return None
 
-        if result.returncode != 0:
-            # 特定错误识别（使用完整 stderr）
-            if "wpcap.dll" in stderr_full or "couldn't load wpcap" in stderr_full:
-                logger.error(
-                    "[%s] 失败: 缺少 Npcap/WinPcap 运行库 (wpcap.dll)。"
-                    "请安装 Npcap (https://npcap.com/) 或 WinPcap 后重试。",
-                    description,
-                )
-            else:
-                logger.error(
-                    "[%s] 失败 (exit=%d, 耗时=%.1fs)\n[STDERR]\n%s",
-                    description,
-                    result.returncode,
-                    elapsed,
-                    stderr_full if stderr_full else "<no stderr>",
-                )
-            if stdout_full:
-                logger.info("[%s] STDOUT:\n%s", description, stdout_full)
-        else:
-            if stdout_full:
-                logger.info("[%s] 完成 (耗时=%.1fs)\n[STDOUT]\n%s", description, elapsed, stdout_full)
-            else:
-                logger.info("[%s] 完成 (耗时=%.1fs)", description, elapsed)
-            if stderr_full:
-                logger.warning("[%s] STDERR:\n%s", description, stderr_full)
-        return result
-    except subprocess.TimeoutExpired:
-        elapsed = time.time() - start
-        logger.error("[%s] 超时 (%ds, 实际耗时=%.1fs)。建议: 增加超时时间或减少扫描范围。", description, timeout, elapsed)
-        return None
-    except FileNotFoundError as e:
-        logger.error("[%s] 找不到可执行文件: %s。请确认工具已正确放置在 tools/ 目录。", description, e.filename if hasattr(e, 'filename') else args[0])
-        return None
-    except Exception as e:
-        elapsed = time.time() - start
-        logger.error("[%s] 执行异常 (%s, 耗时=%.1fs): %s", description, type(e).__name__, elapsed, e)
-        return None
+    class _CompatResult:
+        """Backward-compatible wrapper mapping ToolResult → subprocess-like attributes."""
+        def __init__(self, tr):
+            self.returncode = tr.exit_code
+            self.stdout = tr.stdout
+            self.stderr = tr.stderr
+
+    return _CompatResult(result)
 
 
 def oneforall_scan(domain):
@@ -159,41 +121,27 @@ def massdns_scan(domain):
             logger.error("[massdns] 依赖文件缺失: %s", f)
             return
 
-    try:
-        proc1 = subprocess.Popen(
-            [sys.executable, subbrute_script, names_file, domain],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        proc2 = subprocess.Popen(
-            [massdns_bin, "-r", resolvers_file, "-t", "A", "-o", "S", "-w", "massdns.txt"],
-            stdin=proc1.stdout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        proc1.stdout.close()
-        _stdout, stderr = proc2.communicate(timeout=300)
-        if proc2.returncode != 0:
-            logger.error("[massdns] 失败 (exit=%d)\n[STDERR]\n%s", proc2.returncode, stderr.strip() if stderr else "")
+    # 使用统一的 pipe 工具接口 (cmd1 | cmd2)
+    result = run_pipe_tool(
+        cmd1=[sys.executable, subbrute_script, names_file, domain],
+        cmd2=[massdns_bin, "-r", resolvers_file, "-t", "A", "-o", "S", "-w", "massdns.txt"],
+        description="massdns",
+        timeout=300,
+    )
+
+    if result is None:
+        return
+
+    if result.stdout:
+        logger.info("[massdns] 完成\n[STDOUT]\n%s", result.stdout)
+    else:
+        logger.info("[massdns] 完成")
+
+    if result.stderr and result.stderr.strip():
+        if result.exit_code != 0:
+            logger.error("[massdns] 失败 (exit=%d)\n[STDERR]\n%s", result.exit_code, result.stderr.strip())
         else:
-            if _stdout:
-                logger.info("[massdns] 完成\n[STDOUT]\n%s", _stdout)
-            else:
-                logger.info("[massdns] 完成")
-            if stderr and stderr.strip():
-                logger.warning("[massdns] STDERR:\n%s", stderr.strip())
-    except subprocess.TimeoutExpired:
-        logger.error("[massdns] 超时 (300s)")
-        proc1.kill()
-        proc2.kill()
-    except FileNotFoundError as e:
-        logger.error("[massdns] 找不到可执行文件: %s", e)
+            logger.warning("[massdns] STDERR:\n%s", result.stderr.strip())
 
 
 def subfinder_scan(domain):

@@ -8,9 +8,10 @@ from selectinf import get_logger
 logger = get_logger("collect.extract_domains")
 
 
-def extract_domain_ksubdomain(url):
+def extract_domain_ksubdomain(url, work_dir="."):
+    ksubdomain_path = os.path.join(work_dir, "ksubdomain.txt")
     try:
-        with open("ksubdomain.txt", "r", encoding="utf-8") as f:
+        with open(ksubdomain_path, "r", encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         logger.warning("ksubdomain.txt 不存在，跳过")
@@ -18,20 +19,21 @@ def extract_domain_ksubdomain(url):
 
     domains = re.findall(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b", content)
 
-    output_file = url + ".txt"
+    output_file = os.path.join(work_dir, url + ".txt")
 
     with open(output_file, "a", encoding="utf-8") as f:
         for domain in domains:
             f.write(domain + "\n")
     logger.info("ksubdomain → %s (%d 条)", output_file, len(domains))
 
-    os.remove("ksubdomain.txt")
-    logger.debug("已删除 ksubdomain.txt")
+    os.remove(ksubdomain_path)
+    logger.debug("已删除 %s", ksubdomain_path)
 
 
-def extract_domain_massdns(url):
+def extract_domain_massdns(url, work_dir="."):
+    massdns_path = os.path.join(work_dir, "massdns.txt")
     try:
-        with open("massdns.txt", "r", encoding="utf-8") as f:
+        with open(massdns_path, "r", encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         logger.warning("massdns.txt 不存在，跳过")
@@ -39,20 +41,21 @@ def extract_domain_massdns(url):
 
     domains = re.findall(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b", content)
 
-    output_file = url + ".txt"
+    output_file = os.path.join(work_dir, url + ".txt")
 
     with open(output_file, "a", encoding="utf-8") as f:
         for domain in domains:
             f.write(domain + "\n")
     logger.info("massdns → %s (%d 条)", output_file, len(domains))
 
-    os.remove("massdns.txt")
-    logger.debug("已删除 massdns.txt")
+    os.remove(massdns_path)
+    logger.debug("已删除 %s", massdns_path)
 
 
-def extract_domain_amass(url):
+def extract_domain_amass(url, work_dir="."):
+    amass_path = os.path.join(work_dir, "amass.txt")
     try:
-        with open("amass.txt", "r", encoding="utf-8") as f:
+        with open(amass_path, "r", encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         logger.warning("amass.txt 不存在，跳过")
@@ -60,7 +63,7 @@ def extract_domain_amass(url):
 
     domains = content.split("\n")
 
-    output_file = url + ".txt"
+    output_file = os.path.join(work_dir, url + ".txt")
 
     with open(output_file, "a", encoding="utf-8") as f:
         for domain in domains:
@@ -69,13 +72,14 @@ def extract_domain_amass(url):
 
     logger.info("amass → %s (%d 条)", output_file, len(domains))
 
-    os.remove("amass.txt")
-    logger.debug("已删除 amass.txt")
+    os.remove(amass_path)
+    logger.debug("已删除 %s", amass_path)
 
 
-def extract_domain_subfinder(url):
+def extract_domain_subfinder(url, work_dir="."):
+    subfinder_path = os.path.join(work_dir, "subfinder.txt")
     try:
-        with open("subfinder.txt", "r", encoding="utf-8") as f:
+        with open(subfinder_path, "r", encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
         logger.warning("subfinder.txt 不存在，跳过")
@@ -83,7 +87,7 @@ def extract_domain_subfinder(url):
 
     domains = content.split("\n")
 
-    output_file = url + ".txt"
+    output_file = os.path.join(work_dir, url + ".txt")
 
     with open(output_file, "a", encoding="utf-8") as f:
         for domain in domains:
@@ -92,13 +96,13 @@ def extract_domain_subfinder(url):
 
     logger.info("subfinder → %s (%d 条)", output_file, len(domains))
 
-    os.remove("subfinder.txt")
-    logger.debug("已删除 subfinder.txt")
+    os.remove(subfinder_path)
+    logger.debug("已删除 %s", subfinder_path)
 
 
-def extract_domain_OneForAll(url):
+def extract_domain_OneForAll(url, work_dir="."):
     csv_file = r"engines\OneForAll\results\{}.csv".format(url)
-    txt_file = url + ".txt"
+    txt_file = os.path.join(work_dir, url + ".txt")
 
     domain_list = []
 
@@ -125,19 +129,19 @@ def extract_domain_OneForAll(url):
     logger.debug("已删除 %s", csv_file)
 
 
-def extract_all_domains(url):
+def extract_all_domains(url, work_dir="."):
     """从所有工具输出文件中提取域名并合并到 {url}.txt"""
     logger.info("开始提取域名: %s", url)
     try:
-        extract_domain_subfinder(url)
-        extract_domain_ksubdomain(url)
-        extract_domain_massdns(url)
-        extract_domain_amass(url)
-        extract_domain_OneForAll(url)
+        extract_domain_subfinder(url, work_dir)
+        extract_domain_ksubdomain(url, work_dir)
+        extract_domain_massdns(url, work_dir)
+        extract_domain_amass(url, work_dir)
+        extract_domain_OneForAll(url, work_dir)
     except Exception as e:
         logger.error("域名提取失败: %s", e, exc_info=True)
 
-    output_file = url + ".txt"
+    output_file = os.path.join(work_dir, url + ".txt")
     logger.info("域名已提取并保存到 %s", output_file)
 
 
