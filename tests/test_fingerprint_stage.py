@@ -384,6 +384,46 @@ class TestFingerprintStage:
             lines = [line.strip() for line in f if line.strip()]
         assert "http://example.com" in lines
 
+    def test_fingerprints_table_populated(self, fingerprint_stage, clean_db, temp_dirs):
+        """Verify that fingerprints are actually persisted to SQLite (no mock)."""
+        work_dir, _ = temp_dirs
+        input_path = os.path.join(work_dir, "domain_example.com.txt")
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write("example.com\n")
+
+        # Only mock run_tool; let save_fingerprint hit the real DB
+        with patch("selectinf.stages.fingerprint.run_tool", side_effect=self._mock_run_tool):
+            result = fingerprint_stage.execute(1, input_path)
+
+        assert result.status == "success"
+        assert result.items_output > 0
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM fingerprints WHERE task_id = ?", (1,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        assert count > 0, "fingerprints table should be populated with real data"
+
+    def test_read_domains_strips_url_scheme(self, fingerprint_stage):
+        """_read_domains should extract hostname from URL lines."""
+        # Simulate a file that contains URLs (legacy output from url_converter.py)
+        work_dir = os.path.dirname(os.path.abspath(__file__))
+        test_file = os.path.join(work_dir, "_test_urls.txt")
+        with open(test_file, "w", encoding="utf-8") as f:
+            f.write("http://example.com\n")
+            f.write("https://sub.example.com:8443/path\n")
+            f.write("example.com\n")
+        try:
+            domains = fingerprint_stage._read_domains(test_file)
+            assert "example.com" in domains
+            assert "sub.example.com" in domains
+            assert "http://example.com" not in domains
+            assert len(domains) == 3
+        finally:
+            os.remove(test_file)
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -53,8 +53,13 @@ class FingerprintStage(PipelineStage):
 
         logger.info("读取到 %d 个域名", len(domains))
 
-        # 2. Load httpx configuration
+        # 2. Load httpx and port_scan configurations
         cfg = self.config.fingerprint.get("httpx", ToolConfig())
+        port_scan_cfg = self.config.fingerprint.get("port_scan", ToolConfig(enabled=False))
+
+        if port_scan_cfg.enabled:
+            ps_ports = port_scan_cfg.extra.get("ports", [22, 3306, 6379])
+            logger.info("port_scan 已启用 (端口: %s) — 当前阶段预留，待 VulnScan 实现", ps_ports)
 
         if not cfg.enabled:
             logger.info("httpx 已禁用，跳过指纹识别")
@@ -210,13 +215,29 @@ class FingerprintStage(PipelineStage):
 
     @staticmethod
     def _read_domains(input_path: str) -> List[str]:
-        """Read domains from input file, one per line. Skip empty lines."""
+        """Read domains from input file, one per line. Skip empty lines.
+
+        If a line contains a URL (http:// or https://), the hostname is extracted
+        so that downstream httpx can probe with its own -ports flag.
+        """
         if not os.path.exists(input_path):
             return []
         domains = []
         with open(input_path, "r", encoding="utf-8") as f:
             for line in f:
                 domain = line.strip()
+                if not domain:
+                    continue
+                # Strip scheme if present (e.g. http://example.com -> example.com)
+                if domain.startswith("http://"):
+                    domain = domain[7:]
+                elif domain.startswith("https://"):
+                    domain = domain[8:]
+                # Strip trailing path/port if present (e.g. example.com:8080/path)
+                if "/" in domain:
+                    domain = domain.split("/", 1)[0]
+                if ":" in domain:
+                    domain = domain.rsplit(":", 1)[0]
                 if domain:
                     domains.append(domain)
         return domains
