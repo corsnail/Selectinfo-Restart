@@ -14,7 +14,6 @@ from selectinf.core.config import PipelineConfig, ToolConfig
 from selectinf.core.tool_runner import run_pipe_tool, run_tool
 from selectinf.output.sqlite_manager import save_asset, save_final_domain, save_module_result
 from selectinf.process.deduplicate import deduplicate_domains, deduplicate_url
-from selectinf.process.url_converter import write_urls_to_domains_file
 from selectinf.stages.base import PipelineStage, StageResult
 
 logger = get_logger("stages.collect")
@@ -86,21 +85,15 @@ class CollectStage(PipelineStage):
         else:
             logger.warning("[%s] 文件不存在，跳过复制到 %s", domain_txt, domain_file)
 
-        # 7. Convert domains → URLs (overwrites domain.txt in-place)
-        if os.path.exists(domain_txt):
-            write_urls_to_domains_file(domain_txt)
-        else:
-            logger.warning("[%s] 文件不存在，跳过 URL 转换", domain_txt)
-
-        # 8. JSFinder iteration loop
+        # 7. JSFinder iteration loop
         max_iterations = self._get_jsfinder_max_iterations()
         self._jsfinder_loop(domain, work_path, max_iterations, errors)
 
-        # 9. Save final results to legacy + new tables
+        # 8. Save final results to legacy + new tables
         total = self._save_final_results(task_id, domain, work_path)
         self._save_assets(task_id, domain, work_path)
 
-        # 10. Copy final outputs to output_dir
+        # 9. Copy final outputs to output_dir
         output_path = self._copy_final_outputs(domain, work_path)
 
         items_output = total if total > 0 else self._count_lines(output_path)
@@ -313,7 +306,6 @@ class CollectStage(PipelineStage):
                 with open(domain_file, "a", encoding="utf-8") as f:
                     f.write(content)
 
-                write_urls_to_domains_file(subdomain_path)
                 with open(domain_txt, "a", encoding="utf-8") as f:
                     with open(subdomain_path, "r", encoding="utf-8") as f2:
                         for line in f2:

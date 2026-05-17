@@ -190,9 +190,7 @@ class TestCollectStageAcceptance:
                 f.write(f"new{len(jsfinder_urls)}.example.com\n")
 
         # Test _jsfinder_loop directly to avoid noise from tool execution / extraction
-        # Also patch write_urls_to_domains_file so subdomain content isn't cleared by socket failures
-        with patch.object(collect_stage, "_jsfinder", side_effect=tracking_jsfinder), \
-             patch("selectinf.stages.collect.write_urls_to_domains_file"):
+        with patch.object(collect_stage, "_jsfinder", side_effect=tracking_jsfinder):
             collect_stage._jsfinder_loop("example.com", task_work, max_iterations=2, errors=[])
 
         # With 1 initial URL and max_iterations=2:
