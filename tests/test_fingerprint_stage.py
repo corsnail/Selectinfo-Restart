@@ -294,6 +294,96 @@ class TestFingerprintStage:
         assert not new_json, f"Root polluted with new .json files: {new_json}"
         assert "fingerprints.json" in result.output_path
 
+    def test_httpx_disabled_returns_skipped(self, mock_config, temp_dirs):
+        """When httpx is disabled, stage should return skipped status."""
+        work_dir, output_dir = temp_dirs
+        # Override config to disable httpx
+        cfg = PipelineConfig(
+            collect={},
+            fingerprint={
+                "httpx": ToolConfig(
+                    enabled=False,
+                    timeout=10,
+                    retries=0,
+                    extra={"ports": [80, 443], "threads": 20},
+                )
+            },
+            vulnscan={},
+            ai={},
+            concurrency=4,
+            work_dir=work_dir,
+            output_dir=output_dir,
+        )
+        stage = FingerprintStage(cfg)
+        input_path = os.path.join(work_dir, "domain_example.com.txt")
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write("example.com\n")
+
+        result = stage.execute(1, input_path)
+        assert isinstance(result, StageResult)
+        assert result.status == "skipped"
+        assert result.items_processed == 1
+        assert result.items_output == 0
+
+    def test_missing_input_file_returns_success_zero(self, fingerprint_stage, clean_db, temp_dirs):
+        """When input file does not exist, stage should return success with 0 items."""
+        work_dir, _ = temp_dirs
+        missing_path = os.path.join(work_dir, "nonexistent.txt")
+
+        result = fingerprint_stage.execute(1, missing_path)
+        assert isinstance(result, StageResult)
+        assert result.status == "success"
+        assert result.items_processed == 0
+        assert result.items_output == 0
+
+    def test_malformed_json_line_skipped(self, fingerprint_stage, clean_db, temp_dirs):
+        """Malformed JSON Lines in httpx output should be skipped gracefully."""
+        work_dir, _ = temp_dirs
+        input_path = os.path.join(work_dir, "domain_example.com.txt")
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write("example.com\n")
+
+        def mock_with_bad_json(cmd, description, timeout=10, cwd=None, env=None, retries=0):
+            try:
+                out_idx = cmd.index("-o") + 1
+                out_path = cmd[out_idx]
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write("not valid json\n")
+                    f.write(json.dumps({"url": "http://example.com", "status_code": 200}) + "\n")
+                    f.write("{ broken\n")
+            except ValueError:
+                pass
+            return ToolResult(success=True, stdout="", stderr="", exit_code=0, elapsed=0.1)
+
+        with patch("selectinf.stages.fingerprint.run_tool", side_effect=mock_with_bad_json), \
+             patch("selectinf.stages.fingerprint.save_fingerprint") as mock_save:
+            result = fingerprint_stage.execute(1, input_path)
+
+        assert result.status == "success"
+        assert result.items_output == 1  # Only the valid JSON line
+        assert mock_save.call_count == 1
+
+    def test_nuclei_targets_txt_generated(self, fingerprint_stage, clean_db, temp_dirs):
+        """nuclei_targets.txt should be written with discovered URLs."""
+        work_dir, _ = temp_dirs
+        input_path = os.path.join(work_dir, "domain_example.com.txt")
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write("example.com\n")
+
+        with patch("selectinf.stages.fingerprint.run_tool", side_effect=self._mock_run_tool), \
+             patch("selectinf.stages.fingerprint.save_fingerprint"):
+            result = fingerprint_stage.execute(1, input_path)
+
+        nuclei_path = os.path.join(work_dir, "1", "nuclei_targets.txt")
+        assert os.path.exists(nuclei_path), f"nuclei_targets.txt not found at {nuclei_path}"
+        with open(nuclei_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        assert "http://example.com" in lines
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

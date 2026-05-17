@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 from selectinf import get_logger
 from selectinf.core.config import ToolConfig
 from selectinf.core.tool_runner import run_tool
-from selectinf.models.entities import Fingerprint
+
 from selectinf.output.sqlite_manager import save_fingerprint
 from selectinf.stages.base import PipelineStage, StageResult
 
@@ -73,12 +73,11 @@ class FingerprintStage(PipelineStage):
         tech_detect = cfg.extra.get("tech_detect", True)
         follow_redirects = cfg.extra.get("follow_redirects", True)
 
-        # 3. Build URL targets and write input file for httpx
-        targets = self._build_targets(domains, ports)
+        # 3. Write bare domains for httpx (httpx handles ports via -ports flag)
         target_file = os.path.join(work_path, "httpx_input.txt")
         with open(target_file, "w", encoding="utf-8") as f:
-            f.write("\n".join(targets))
-        logger.info("生成 %d 个探测目标 → %s", len(targets), target_file)
+            f.write("\n".join(domains))
+        logger.info("生成 %d 个探测目标 → %s", len(domains), target_file)
 
         # 4. Build httpx command
         output_file = os.path.join(work_path, "httpx_output.json")
@@ -102,7 +101,7 @@ class FingerprintStage(PipelineStage):
         cmd.extend(["-timeout", str(timeout), "-no-color"])
 
         # 5. Execute httpx
-        logger.info("启动 httpx 指纹识别 (目标数=%d, 端口=%s)", len(targets), port_csv)
+        logger.info("启动 httpx 指纹识别 (目标数=%d, 端口=%s)", len(domains), port_csv)
         result = run_tool(cmd, description="httpx", timeout=timeout, retries=retries)
 
         # 6. Handle tool execution outcome
@@ -180,7 +179,22 @@ class FingerprintStage(PipelineStage):
             logger.error("写入 fingerprints.json 失败: %s", e)
             errors.append(str(e))
 
-        # 9. Build and return StageResult
+        # 9. Write nuclei_targets.txt for downstream VulnScan stage
+        nuclei_targets_path = os.path.join(work_path, "nuclei_targets.txt")
+        try:
+            if fingerprints:
+                urls = [fp["url"] for fp in fingerprints if fp.get("url")]
+            else:
+                # Fallback: probe all domain+port combinations
+                urls = self._build_targets(domains, ports)
+            with open(nuclei_targets_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(urls))
+            logger.info("nuclei 目标列表已写入 %s (%d 条)", nuclei_targets_path, len(urls))
+        except Exception as e:
+            logger.error("写入 nuclei_targets.txt 失败: %s", e)
+            errors.append(str(e))
+
+        # 10. Build and return StageResult
         status = "success" if not errors else "partial"
         return StageResult(
             status=status,
@@ -269,9 +283,13 @@ class FingerprintStage(PipelineStage):
             except (ValueError, TypeError):
                 pass
 
-        # Port: default to 443 if missing
+        # Port: default to 443 if missing; cast to int for SQLite INTEGER
         port = data.get("port", 443)
         if port is None:
+            port = 443
+        try:
+            port = int(port)
+        except (ValueError, TypeError):
             port = 443
 
         return {
