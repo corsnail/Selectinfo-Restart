@@ -136,7 +136,7 @@ pip install -r OneForAll/requirements.txt
 |-------|-------------|--------|-------|
 | Phase 1 | Infrastructure (config, tool_runner, SQLite schema, entities, ABC stubs) | **Complete** | `test_phase1.py` 0 failures |
 | Phase 2 | Collect Stage + Orchestrator | **Complete** | `test_collect_stage.py` 6/6 pass, `test_orchestrator.py` 6/6 pass |
-| Phase 3 | Fingerprint Stage (httpx integration) | **Complete** | `test_fingerprint_stage.py` 10/10 pass |
+| Phase 3 | Fingerprint Stage (httpx integration) | **Complete** | `test_fingerprint_stage.py` 14/14 pass |
 | Phase 4 | VulnScan Stage (nuclei integration) | Stub | Skipped |
 | Phase 5 | AI Analysis Stage (LLM client, prompts, report generation) | Stub | Skipped |
 | Phase 6 | run.py thin wrapper + end-to-end validation | Pending | — |
