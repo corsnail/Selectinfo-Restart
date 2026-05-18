@@ -543,7 +543,7 @@ vulnscan:
     enabled: true
     timeout: 1800
     retries: 1
-    templates_dir: "nuclei-templates"
+    templates_dir: ""             # 留空 = 使用 nuclei 默认路径 (%USERPROFILE%\nuclei-templates)
     severity_filter: ["critical", "high", "medium"]  # 排除 low/info
     rate_limit: 50            # 每秒请求数
     threads: 10
@@ -997,8 +997,8 @@ run.py                     # 入口 (薄包装)
 - [x] Phase 2: Pipeline Orchestrator (`selectinf/pipeline/orchestrator.py`) — stage 调度 + FSM + work_dir 生命周期
 - [x] Phase 2: 集成测试 (`tests/test_collect_stage.py`, `tests/test_orchestrator.py`) — 12/12 pass
 - [x] Phase 2: 向后兼容 — `final_results` / `module_results` 表仍写入，ARL/MySQL 导出未改动
-- [ ] Phase 3: Fingerprint Stage (`httpx` 集成)
-- [ ] Phase 4: VulnScan Stage (`nuclei` 集成)
-- [ ] Phase 5: AI Analysis Stage (LLM client + prompts)
-- [ ] Phase 6: `run.py` 薄包装层 + 端到端验证
-- [ ] README 更新四阶段说明
+- [x] Phase 3: Fingerprint Stage (`httpx` 集成)
+- [x] Phase 4: VulnScan Stage (`nuclei` 集成)
+- [x] Phase 5: AI Analysis Stage (LLM client + prompts)
+- [x] Phase 6: `run.py` 薄包装层 + 端到端验证
+- [x] README 更新四阶段说明

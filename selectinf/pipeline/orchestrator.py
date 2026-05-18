@@ -5,7 +5,7 @@ import shutil
 
 from selectinf import get_logger
 from selectinf.core.config import load_config
-from selectinf.output.sqlite_manager import create_task, finish_task, get_task_summary
+from selectinf.output.sqlite_manager import create_task, finish_task, get_task_summary, count_fingerprints, count_vulnerabilities
 from selectinf.pipeline.task_fsm import TaskFSM, TaskState, update_task_status
 from selectinf.stages.ai_analysis import AIAnalysisStage
 from selectinf.stages.base import StageResult
@@ -59,6 +59,19 @@ class PipelineOrchestrator:
 
         # 2. Execute stages sequentially
         for stage_name, stage in self.stages:
+            # Stage-level enable/disable from pipeline_config.yaml
+            stage_enabled = self.config.stages.get(stage_name, True)
+            if not stage_enabled:
+                logger.info("阶段 %s 已在配置中禁用，跳过", stage_name)
+                results[stage_name] = {
+                    "status": "skipped",
+                    "items_processed": 0,
+                    "items_output": 0,
+                    "errors": [],
+                    "output_path": last_output_path,
+                }
+                continue
+
             logger.info("进入阶段: %s", stage_name)
 
             # Map stage name → FSM state
@@ -112,20 +125,26 @@ class PipelineOrchestrator:
 
         # 3. Finalise task
         summary = get_task_summary(task_id)
+        total_fingerprints = count_fingerprints(task_id)
+        total_vulns = count_vulnerabilities(task_id)
         finish_task(
             task_id,
             total_subdomains=summary.get("total_unique_domains", 0),
+            total_fingerprints=total_fingerprints,
+            total_vulns=total_vulns,
             note=f"Pipeline finished with status={overall_status}"
         )
 
-        # 4. Clean up work_dir (intermediate files)
+        # 4. Clean up work_dir (intermediate files) unless keep_work_dir is set
         work_path = os.path.join(self.config.work_dir, str(task_id))
-        if os.path.exists(work_path):
+        if os.path.exists(work_path) and not getattr(self.config, "keep_work_dir", False):
             try:
                 shutil.rmtree(work_path)
                 logger.info("已清理工作目录: %s", work_path)
             except Exception as e:
                 logger.warning("清理工作目录失败: %s", e)
+        elif os.path.exists(work_path) and getattr(self.config, "keep_work_dir", False):
+            logger.info("保留工作目录 (keep_work_dir=true): %s", work_path)
 
         logger.info("Pipeline 完成: task_id=%d, status=%s", task_id, overall_status)
 

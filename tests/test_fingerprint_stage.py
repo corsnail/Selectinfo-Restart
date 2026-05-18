@@ -55,8 +55,13 @@ def mock_config(temp_dirs):
                     "tech_detect": True,
                     "follow_redirects": True,
                     "threads": 20,
+                    "process_timeout": 60,
                 },
-            )
+            ),
+            "port_scan": ToolConfig(
+                enabled=False,
+                extra={"ports": [22, 3306, 6379]},
+            ),
         },
         vulnscan={},
         ai={},
@@ -98,6 +103,19 @@ class TestFingerprintStage:
             with open(out_path, "w", encoding="utf-8") as f:
                 for item in fake_data:
                     f.write(json.dumps(item) + "\n")
+        except ValueError:
+            pass
+        return ToolResult(success=True, stdout="", stderr="", exit_code=0, elapsed=0.1)
+
+    @staticmethod
+    def _mock_run_tool_empty(cmd, description, timeout=10, cwd=None, env=None, retries=0):
+        """Mock run_tool that produces no output (zero fingerprints)."""
+        try:
+            out_idx = cmd.index("-o") + 1
+            out_path = cmd[out_idx]
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "w", encoding="utf-8") as f:
+                pass  # empty output
         except ValueError:
             pass
         return ToolResult(success=True, stdout="", stderr="", exit_code=0, elapsed=0.1)
@@ -228,13 +246,15 @@ class TestFingerprintStage:
         with open(input_path, "w", encoding="utf-8") as f:
             f.write("example.com\n")
 
-        with patch("selectinf.stages.fingerprint.run_tool", return_value=None), \
-             patch("selectinf.stages.fingerprint.save_fingerprint") as mock_save:
+        with patch.object(
+            fingerprint_stage, "_resolve_binary", return_value=("", "tools/httpx/httpx")
+        ), patch("selectinf.stages.fingerprint.save_fingerprint") as mock_save:
             result = fingerprint_stage.execute(1, input_path)
 
         assert isinstance(result, StageResult)
         assert result.status == "partial"
         assert len(result.errors) > 0
+        assert "未找到" in result.errors[0]
         assert not mock_save.called
 
     def test_empty_domain_file_returns_success_zero_items(self, fingerprint_stage, clean_db, temp_dirs):
@@ -305,8 +325,12 @@ class TestFingerprintStage:
                     enabled=False,
                     timeout=10,
                     retries=0,
-                    extra={"ports": [80, 443], "threads": 20},
-                )
+                    extra={"ports": [80, 443], "threads": 20, "process_timeout": 60},
+                ),
+                "port_scan": ToolConfig(
+                    enabled=False,
+                    extra={"ports": [22, 3306, 6379]},
+                ),
             },
             vulnscan={},
             ai={},
@@ -415,14 +439,115 @@ class TestFingerprintStage:
             f.write("http://example.com\n")
             f.write("https://sub.example.com:8443/path\n")
             f.write("example.com\n")
+            f.write("example.com:8080/api\n")  # port+path without scheme
         try:
             domains = fingerprint_stage._read_domains(test_file)
             assert "example.com" in domains
             assert "sub.example.com" in domains
             assert "http://example.com" not in domains
-            assert len(domains) == 3
+            assert len(domains) == 4
         finally:
             os.remove(test_file)
+
+    def test_port_null_defaults_to_443(self, fingerprint_stage):
+        """When httpx output port is null, default to 443."""
+        entry = {"url": "https://example.com", "port": None}
+        fp = fingerprint_stage._parse_fingerprint_entry(entry)
+        assert fp["port"] == 443
+
+    def test_port_string_converted_to_int(self, fingerprint_stage):
+        """When httpx output port is a string, cast to int."""
+        entry = {"url": "http://example.com:8080", "port": "8080"}
+        fp = fingerprint_stage._parse_fingerprint_entry(entry)
+        assert fp["port"] == 8080
+        assert isinstance(fp["port"], int)
+
+    def test_time_numeric_conversion(self, fingerprint_stage):
+        """When httpx time is a numeric value (not '1.23s'), convert to ms."""
+        entry = {"url": "http://example.com", "time": 2.5}
+        fp = fingerprint_stage._parse_fingerprint_entry(entry)
+        assert fp["response_time_ms"] == 2500
+
+    def test_port_scan_enabled_does_not_crash(self, mock_config, temp_dirs):
+        """port_scan enabled should not crash the stage (optional feature)."""
+        work_dir, output_dir = temp_dirs
+        cfg = PipelineConfig(
+            collect={},
+            fingerprint={
+                "httpx": ToolConfig(
+                    enabled=True,
+                    timeout=10,
+                    retries=0,
+                    extra={"ports": [80, 443], "threads": 20, "process_timeout": 60},
+                ),
+                "port_scan": ToolConfig(
+                    enabled=True,
+                    extra={"ports": [22, 3306]},
+                ),
+            },
+            vulnscan={},
+            ai={},
+            concurrency=4,
+            work_dir=work_dir,
+            output_dir=output_dir,
+        )
+        stage = FingerprintStage(cfg)
+        input_path = os.path.join(work_dir, "domain_example.com.txt")
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write("example.com\n")
+
+        with patch("selectinf.stages.fingerprint.run_tool", side_effect=self._mock_run_tool), \
+             patch("selectinf.stages.fingerprint.save_fingerprint"):
+            result = stage.execute(1, input_path)
+
+        assert isinstance(result, StageResult)
+        assert result.status in ("success", "partial")
+
+    def test_zero_fingerprint_fallback_writes_domains(self, fingerprint_stage, clean_db, temp_dirs):
+        """When httpx produces zero fingerprints, nuclei_targets.txt should contain raw domains."""
+        work_dir, _ = temp_dirs
+        input_path = os.path.join(work_dir, "domain_example.com.txt")
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write("example.com\nsub.example.com\n")
+
+        with patch("selectinf.stages.fingerprint.run_tool", side_effect=self._mock_run_tool_empty), \
+             patch("selectinf.stages.fingerprint.save_fingerprint"):
+            result = fingerprint_stage.execute(1, input_path)
+
+        nuclei_path = os.path.join(work_dir, "1", "nuclei_targets.txt")
+        assert os.path.exists(nuclei_path)
+        with open(nuclei_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        # Should contain raw domains, not generated URLs
+        assert "example.com" in lines
+        assert "sub.example.com" in lines
+        assert "http://example.com" not in lines
+        assert "https://example.com" not in lines
+
+    def test_timeout_exit_code_minus_one(self, fingerprint_stage, clean_db, temp_dirs):
+        """When run_tool returns exit_code=-1 (timeout), stage should report partial with error."""
+        work_dir, _ = temp_dirs
+        input_path = os.path.join(work_dir, "domain_example.com.txt")
+        os.makedirs(os.path.dirname(input_path), exist_ok=True)
+        with open(input_path, "w", encoding="utf-8") as f:
+            f.write("example.com\n")
+
+        timeout_result = ToolResult(
+            success=False, stdout="", stderr="TimeoutExpired",
+            exit_code=-1, elapsed=300.0
+        )
+
+        with patch("selectinf.stages.fingerprint.run_tool", return_value=timeout_result), \
+             patch("selectinf.stages.fingerprint.save_fingerprint") as mock_save:
+            result = fingerprint_stage.execute(1, input_path)
+
+        assert isinstance(result, StageResult)
+        assert result.status == "partial"
+        assert len(result.errors) > 0
+        assert "超时" in result.errors[0]
+        assert not mock_save.called
 
 
 if __name__ == "__main__":

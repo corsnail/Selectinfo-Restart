@@ -189,17 +189,17 @@ def create_task(target_domain: str) -> int:
     return task_id
 
 
-def finish_task(task_id: int, total_subdomains: int = 0, note: str = ""):
+def finish_task(task_id: int, total_subdomains: int = 0, total_fingerprints: int = 0, total_vulns: int = 0, note: str = ""):
     """标记任务完成"""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE task SET end_time = CURRENT_TIMESTAMP, status = 'completed', total_subdomains = ?, note = ? WHERE id = ?",
-        (total_subdomains, note, task_id)
+        "UPDATE task SET end_time = CURRENT_TIMESTAMP, status = 'completed', total_subdomains = ?, total_fingerprints = ?, total_vulns = ?, note = ? WHERE id = ?",
+        (total_subdomains, total_fingerprints, total_vulns, note, task_id)
     )
     conn.commit()
     conn.close()
-    logger.info("[SQLite] 任务完成: id=%d, 子域名总数=%d", task_id, total_subdomains)
+    logger.info("[SQLite] 任务完成: id=%d, 子域名总数=%d, 指纹总数=%d, 漏洞总数=%d", task_id, total_subdomains, total_fingerprints, total_vulns)
 
 
 def save_module_result(task_id: int, module_name: str, output_file: str = None,
@@ -358,6 +358,26 @@ def get_fingerprints(task_id: int) -> list:
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def count_fingerprints(task_id: int) -> int:
+    """获取任务指纹数量"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM fingerprints WHERE task_id = ?", (task_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+
+def count_vulnerabilities(task_id: int) -> int:
+    """获取任务漏洞数量"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM vulnerabilities WHERE task_id = ?", (task_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 
 def get_vulnerabilities(task_id: int, severity: str = None) -> list:

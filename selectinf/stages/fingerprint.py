@@ -2,8 +2,10 @@
 
 import json
 import os
+import shutil
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from selectinf import get_logger
 from selectinf.core.config import ToolConfig
@@ -73,6 +75,7 @@ class FingerprintStage(PipelineStage):
             )
 
         timeout = cfg.timeout
+        process_timeout = cfg.extra.get("process_timeout", max(timeout * 10, 300))
         retries = cfg.retries
         ports = list(set(cfg.extra.get("ports", [80, 443])))
         threads = cfg.extra.get("threads", 20)
@@ -85,12 +88,23 @@ class FingerprintStage(PipelineStage):
             f.write("\n".join(domains))
         logger.info("生成 %d 个探测目标 → %s", len(domains), target_file)
 
-        # 4. Build httpx command
+        # 4. Resolve binary path and build httpx command
+        raw_binary = cfg.extra.get("binary_path", "tools/httpx/httpx")
+        binary, bin_err = self._resolve_binary(raw_binary)
+        if not binary:
+            error_msg = f"httpx 二进制未找到: {bin_err}"
+            logger.error(error_msg)
+            errors.append(error_msg)
+            return StageResult(
+                status="partial",
+                items_processed=len(domains),
+                items_output=0,
+                errors=errors,
+                output_path=input_path,
+            )
+
         output_file = os.path.join(work_path, "httpx_output.json")
         port_csv = ",".join(str(p) for p in ports)
-        # Platform-aware binary path (Windows .exe vs Unix no suffix)
-        binary_name = "httpx.exe" if sys.platform.startswith("win") else "httpx"
-        binary = os.path.join("tools", "httpx", binary_name)
 
         cmd: List[str] = [
             binary,
@@ -109,12 +123,15 @@ class FingerprintStage(PipelineStage):
         cmd.extend(["-timeout", str(timeout), "-no-color"])
 
         # 5. Execute httpx
-        logger.info("启动 httpx 指纹识别 (目标数=%d, 端口=%s)", len(domains), port_csv)
-        result = run_tool(cmd, description="httpx", timeout=timeout, retries=retries)
+        logger.info(
+            "启动 httpx 指纹识别 (目标数=%d, 端口=%s, 请求超时=%ds, 进程超时=%ds)",
+            len(domains), port_csv, timeout, process_timeout
+        )
+        result = run_tool(cmd, description="httpx", timeout=process_timeout, retries=retries)
 
         # 6. Handle tool execution outcome
         if result is None:
-            error_msg = "httpx 执行失败: 二进制文件未找到"
+            error_msg = f"httpx 执行失败: 二进制文件未找到 (期望路径: {binary})"
             logger.error(error_msg)
             errors.append(error_msg)
             return StageResult(
@@ -125,7 +142,12 @@ class FingerprintStage(PipelineStage):
                 output_path=input_path,
             )
 
-        if not result.success:
+        if result.exit_code == -1:
+            # TimeoutExpired: subprocess was killed, likely no output file
+            error_msg = f"httpx 进程超时 (>{process_timeout}s)，未生成输出文件"
+            logger.error(error_msg)
+            errors.append(error_msg)
+        elif not result.success:
             stderr_snippet = (result.stderr or "")[:500]
             logger.warning(
                 "httpx 退出码非零 (exit_code=%d), 尝试解析部分输出\nstderr: %s",
@@ -193,8 +215,13 @@ class FingerprintStage(PipelineStage):
             if fingerprints:
                 urls = [fp["url"] for fp in fingerprints if fp.get("url")]
             else:
-                # Fallback: probe all domain+port combinations
-                urls = self._build_targets(domains, ports)
+                # Fallback: pass raw domains so VulnScan can decide probe strategy
+                # instead of blindly generating domain×port combinations
+                urls = domains
+                logger.info(
+                    "httpx 无产出，nuclei_targets.txt 保留原始域名 (%d 条) 供 VulnScan 自行探测",
+                    len(domains)
+                )
             with open(nuclei_targets_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(urls))
             logger.info("nuclei 目标列表已写入 %s (%d 条)", nuclei_targets_path, len(urls))
@@ -217,32 +244,53 @@ class FingerprintStage(PipelineStage):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _resolve_binary(raw_path: str) -> Tuple[str, str]:
+        """Resolve binary path with platform-aware suffix.
+
+        Appends ``.exe`` on Windows if the path does not already end with it.
+        Falls back to ``shutil.which`` when the explicit path is missing.
+
+        Returns:
+            (resolved_path, error_message).  ``error_message`` is empty on success.
+        """
+        if sys.platform.startswith("win") and not raw_path.endswith(".exe"):
+            candidate = raw_path + ".exe"
+        else:
+            candidate = raw_path
+
+        if not os.path.isfile(candidate):
+            base = os.path.basename(candidate)
+            in_path = shutil.which(base)
+            if in_path:
+                return in_path, ""
+            return "", candidate
+
+        if not sys.platform.startswith("win") and not os.access(candidate, os.X_OK):
+            return "", f"{candidate} 存在但无可执行权限"
+
+        return candidate, ""
+
+    @staticmethod
     def _read_domains(input_path: str) -> List[str]:
         """Read domains from input file, one per line. Skip empty lines.
 
         If a line contains a URL (http:// or https://), the hostname is extracted
         so that downstream httpx can probe with its own -ports flag.
+        Uses urllib.parse.urlparse for robust scheme/path/port handling.
         """
         if not os.path.exists(input_path):
             return []
         domains = []
         with open(input_path, "r", encoding="utf-8") as f:
             for line in f:
-                domain = line.strip()
-                if not domain:
+                raw = line.strip()
+                if not raw:
                     continue
-                # Strip scheme if present (e.g. http://example.com -> example.com)
-                if domain.startswith("http://"):
-                    domain = domain[7:]
-                elif domain.startswith("https://"):
-                    domain = domain[8:]
-                # Strip trailing path/port if present (e.g. example.com:8080/path)
-                if "/" in domain:
-                    domain = domain.split("/", 1)[0]
-                if ":" in domain:
-                    domain = domain.rsplit(":", 1)[0]
-                if domain:
-                    domains.append(domain)
+                # Use urlparse for robust extraction; prepend scheme if missing
+                parsed = urlparse(raw if raw.startswith("http") else f"http://{raw}")
+                hostname = parsed.hostname
+                if hostname:
+                    domains.append(hostname)
         return domains
 
     @staticmethod
