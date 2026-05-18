@@ -18,6 +18,9 @@ from selectinf.output.sqlite_manager import (
 )
 from selectinf.core.tool_runner import run_tool, run_pipe_tool
 
+# Phase 6: Pipeline orchestrator import
+from selectinf.pipeline.orchestrator import PipelineOrchestrator
+
 logger = get_logger("run")
 
 
@@ -188,10 +191,16 @@ def jsfinder(url):
     )
 
 
-# 主函数
-def main():
+# ── Legacy main (backward-compatible) ─────────────────────────────
+
+def main_legacy():
+    """Legacy entry point — performs asset collection using inline logic.
+
+    Kept for backward compatibility; new code uses PipelineOrchestrator
+    via ``main()`` below.
+    """
     logger.info("=" * 50)
-    logger.info("selectinf 资产收集框架启动")
+    logger.info("selectinf 资产收集框架启动 (Legacy 模式)")
     logger.info("=" * 50)
 
     # 初始化 SQLite 数据库
@@ -311,6 +320,76 @@ def main():
     # 保存最终去重后的域名到 SQLite
     total_domains = _save_final_results(task_id, domain)
 
+    # 保留原有导出逻辑 (ARL + MySQL)
+    _legacy_export(domain)
+
+    # 完成任务并输出摘要
+    summary = get_task_summary(task_id)
+    finish_task(task_id, total_subdomains=summary["total_unique_domains"])
+    logger.info("[SQLite] 任务摘要: %s", summary)
+    logger.info("selectinf 任务完成!")
+    input("按任意键退出...")
+    sys.exit(0)
+
+
+# ── New main (PipelineOrchestrator thin wrapper) ──────────────────
+
+def main():
+    """Entry point — thin wrapper around PipelineOrchestrator.
+
+    Mirrors the legacy CLI experience (prompt for domain, wait for key press)
+    while delegating all scanning work to the four-stage pipeline.
+    """
+    logger.info("=" * 50)
+    logger.info("selectinf 安全扫描框架启动")
+    logger.info("=" * 50)
+
+    # 初始化 SQLite 数据库
+    init_db()
+
+    raw_input = input("请输入URL: ")
+    domain = sanitize_target(raw_input)
+
+    # Phase 6: 使用 PipelineOrchestrator 执行四阶段流水线
+    logger.info("启动 PipelineOrchestrator ...")
+    try:
+        orchestrator = PipelineOrchestrator()
+        result = orchestrator.run(domain)
+    except Exception as e:
+        logger.error("Pipeline 执行失败: %s", e, exc_info=True)
+        print(f"\nPipeline 执行失败: {e}")
+        print("是否回退到 Legacy 模式? (y/n): ", end="")
+        choice = input().strip().lower()
+        if choice == "y":
+            return main_legacy()
+        input("按任意键退出...")
+        sys.exit(1)
+
+    task_id = result["task_id"]
+    overall_status = result["status"]
+    logger.info("Pipeline 完成: task_id=%d, status=%s", task_id, overall_status)
+
+    # 打印各阶段摘要
+    for stage_name, stage_result in result["results"].items():
+        logger.info(
+            "  [%s] status=%s, processed=%d, output=%d, errors=%d",
+            stage_name,
+            stage_result["status"],
+            stage_result["items_processed"],
+            stage_result["items_output"],
+            len(stage_result["errors"]),
+        )
+
+    # 保留原有导出逻辑 (ARL + MySQL) — 基于 legacy 文件输出
+    _legacy_export(domain)
+
+    logger.info("selectinf 任务完成!")
+    input("按任意键退出...")
+    sys.exit(0)
+
+
+def _legacy_export(domain):
+    """保留原有 ARL 导出和 MySQL 导入逻辑（向后兼容）."""
     # ARL 导出
     domain_file = "domain_" + domain + ".txt"
     if os.path.exists(domain_file):
@@ -336,14 +415,6 @@ def main():
             logger.error("[MySQL 导入] 失败: %s", e, exc_info=True)
     else:
         logger.warning("[%s] 文件不存在，跳过 MySQL 导入", csv_file)
-
-    # 完成任务并输出摘要
-    summary = get_task_summary(task_id)
-    finish_task(task_id, total_subdomains=summary["total_unique_domains"])
-    logger.info("[SQLite] 任务摘要: %s", summary)
-    logger.info("selectinf 任务完成!")
-    input("按任意键退出...")
-    sys.exit(0)
 
 
 def _count_lines(filepath):

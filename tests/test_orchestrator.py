@@ -232,5 +232,107 @@ class TestOrchestratorIntegration:
         assert fingerprint_result["items_output"] > 0, "FingerprintStage should produce fingerprints"
 
 
+    def test_fingerprint_to_vulnscan_chain(self, clean_db, temp_dirs):
+        """CollectStage → FingerprintStage → VulnScanStage chaining."""
+        work_dir, output_dir = temp_dirs
+        cfg = PipelineConfig(
+            collect={
+                "subfinder": ToolConfig(enabled=True, timeout=5, retries=0),
+                "amass": ToolConfig(enabled=True, timeout=5, retries=0),
+                "oneforall": ToolConfig(enabled=True, timeout=5, retries=0),
+                "massdns": ToolConfig(enabled=True, timeout=5, retries=0),
+                "ksubdomain": ToolConfig(enabled=True, timeout=5, retries=0),
+                "jsfinder": ToolConfig(enabled=True, timeout=5, retries=0, extra={"max_iterations": 1}),
+            },
+            fingerprint={
+                "httpx": ToolConfig(
+                    enabled=True, timeout=10, retries=0,
+                    extra={"ports": [80, 443], "threads": 20, "tech_detect": True, "follow_redirects": True}
+                )
+            },
+            vulnscan={
+                "nuclei": ToolConfig(
+                    enabled=True, timeout=10, retries=0,
+                    extra={
+                        "severity_filter": ["critical", "high", "medium"],
+                        "rate_limit": 50,
+                        "threads": 10,
+                        "bulk_size": 100,
+                    }
+                )
+            },
+            ai={},
+            concurrency=2,
+            work_dir=work_dir,
+            output_dir=output_dir,
+        )
+
+        def mock_httpx(cmd, description, timeout=10, cwd=None, env=None, retries=0):
+            from selectinf.core.tool_runner import ToolResult
+            try:
+                out_idx = cmd.index("-o") + 1
+                out_path = cmd[out_idx]
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                fake = {"url": "http://sub1.example.com", "status_code": 200, "webserver": "nginx", "tech": ["nginx"]}
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(fake) + "\n")
+            except ValueError:
+                pass
+            return ToolResult(success=True, stdout="", stderr="", exit_code=0, elapsed=0.1)
+
+        def mock_nuclei(cmd, description, timeout=10, cwd=None, env=None, retries=0):
+            from selectinf.core.tool_runner import ToolResult
+            try:
+                out_idx = cmd.index("-o") + 1
+                out_path = cmd[out_idx]
+                os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                fake = {
+                    "template-id": "CVE-2024-TEST",
+                    "template-path": "http/cves/2024/CVE-2024-TEST.yaml",
+                    "info": {
+                        "name": "Test Vuln",
+                        "severity": "high",
+                        "description": "Test vulnerability",
+                    },
+                    "host": "http://sub1.example.com",
+                    "matched-at": "http://sub1.example.com/path",
+                }
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(fake) + "\n")
+            except ValueError:
+                pass
+            return ToolResult(success=True, stdout="", stderr="", exit_code=0, elapsed=0.1)
+
+        with patch("selectinf.pipeline.orchestrator.load_config", return_value=cfg), \
+             patch("selectinf.stages.collect.run_tool", side_effect=self._mock_tool), \
+             patch("selectinf.stages.collect.run_pipe_tool", side_effect=self._mock_pipe_tool), \
+             patch("selectinf.stages.fingerprint.run_tool", side_effect=mock_httpx), \
+             patch("selectinf.stages.vulnscan.run_tool", side_effect=mock_nuclei):
+            orch = PipelineOrchestrator()
+            result = orch.run("example.com")
+
+        collect_result = result["results"]["collect"]
+        fingerprint_result = result["results"]["fingerprint"]
+        vulnscan_result = result["results"]["vulnscan"]
+
+        # CollectStage output must be a file path
+        assert os.path.exists(collect_result["output_path"]), "CollectStage output_path must exist"
+        # FingerprintStage must process it successfully
+        assert fingerprint_result["status"] == "success", f"FingerprintStage failed: {fingerprint_result.get('errors')}"
+        assert fingerprint_result["items_output"] > 0, "FingerprintStage should produce fingerprints"
+        # VulnScanStage must process fingerprint output successfully
+        assert vulnscan_result["status"] == "success", f"VulnScanStage failed: {vulnscan_result.get('errors')}"
+        assert vulnscan_result["items_output"] > 0, "VulnScanStage should produce vulnerabilities"
+
+        # Verify vulnerabilities table has data
+        task_id = result["task_id"]
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM vulnerabilities WHERE task_id = ?", (task_id,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        assert count > 0, "vulnerabilities table should be populated"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

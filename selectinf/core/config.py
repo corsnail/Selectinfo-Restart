@@ -46,6 +46,8 @@ class PipelineConfig:
     concurrency: int = 4
     output_dir: str = "output"
     work_dir: str = "work"
+    keep_work_dir: bool = False
+    stages: Dict[str, bool] = field(default_factory=dict)
 
 
 def _load_stage_tools(stage_data: Any) -> Dict[str, ToolConfig]:
@@ -101,6 +103,8 @@ def load_config(path: str = "pipeline_config.yaml") -> PipelineConfig:
     concurrency = pipe.get("concurrency", 4)
     output_dir = pipe.get("output_dir", "output")
     work_dir = pipe.get("work_dir", "work")
+    keep_work_dir = pipe.get("keep_work_dir", False)
+    stages = pipe.get("stages", {})
 
     collect = _load_stage_tools(raw.get("collect", {}))
     fingerprint = _load_stage_tools(raw.get("fingerprint", {}))
@@ -113,7 +117,8 @@ def load_config(path: str = "pipeline_config.yaml") -> PipelineConfig:
         f"Loaded config: concurrency={concurrency}, "
         f"collect={len(collect)} tools, "
         f"fingerprint={len(fingerprint)} tools, "
-        f"vulnscan={len(vulnscan)} tools"
+        f"vulnscan={len(vulnscan)} tools, "
+        f"keep_work_dir={keep_work_dir}"
     )
 
     return PipelineConfig(
@@ -124,4 +129,6 @@ def load_config(path: str = "pipeline_config.yaml") -> PipelineConfig:
         concurrency=concurrency,
         output_dir=output_dir,
         work_dir=work_dir,
+        keep_work_dir=keep_work_dir,
+        stages=stages,
     )

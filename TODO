@@ -51,3 +51,5 @@ MCP 协议集成 (Planned)：
 漏洞优先级排序 (Risk Scoring)：
 
 AI 根据收集到的中间数据（标题、Headers、目录结构）自动计算风险评分，优先对高分资产执行 nuclei 深度扫描。
+
+set DASHSCOPE_API_KEY=

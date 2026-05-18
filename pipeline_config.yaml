@@ -1,8 +1,9 @@
-# ── 全局设置 ─────────────────────────
+﻿# ── 全局设置 ─────────────────────────
 pipeline:
   concurrency: 4              # 全局最大并发数
   work_dir: "work"            # 每任务的临时目录
   output_dir: "output"        # 最终结果目录
+  keep_work_dir: false        # 调试模式：保留 work/{task_id}/ 不清理
   stages:
     collect: true
     fingerprint: true
@@ -47,7 +48,9 @@ collect:
 fingerprint:
   httpx:
     enabled: true
-    timeout: 30
+    binary_path: "tools/httpx/httpx"   # 可配置二进制路径，自动识别 .exe
+    timeout: 30               # httpx 单次请求超时 (秒)
+    process_timeout: 300      # httpx 子进程总超时 (秒)
     retries: 2
     ports: [80, 443, 8080, 8443]
     tech_detect: true
@@ -61,9 +64,10 @@ fingerprint:
 vulnscan:
   nuclei:
     enabled: true
+    binary_path: "tools/nuclei/nuclei"
     timeout: 1800
     retries: 1
-    templates_dir: "nuclei-templates"
+    templates_dir: ""           # 留空 = 使用 nuclei 默认路径 (%USERPROFILE%\nuclei-templates)
     severity_filter: ["critical", "high", "medium"]  # 排除 low/info
     rate_limit: 50            # 每秒请求数
     threads: 10
@@ -71,15 +75,13 @@ vulnscan:
 
 # ── Stage 4: AI 分析 ───────────────
 ai:
-  provider: "openai"          # openai | ollama
-  openai:
-    api_key_env: "OPENAI_API_KEY"
-    model: "gpt-4o"
-    temperature: 0.3
-    max_tokens: 4096
-  ollama:
-    base_url: "http://localhost:11434"
-    model: "llama3"
+  provider: "bailian"          # openai | ollama | bailian
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"                # 空=自动 (OpenAI: 默认, 百炼: dashscope..., Ollama: localhost:11434/v1)
+  api_key_env: "DASHSCOPE_API_KEY"  # 环境变量名 (百炼用 DASHSCOPE_API_KEY, Ollama 留空)
+  model: "qwen-plus"             # gpt-4o / qwen-plus / llama3
+  temperature: 0.3
+  max_tokens: 4096
+  timeout: 120                # LLM 请求超时 (秒)；Ollama 冷启动自动延长至 120s
   fp_validation:
     enabled: true
     threshold: 0.7            # 置信度低于此值标记为疑似误报
