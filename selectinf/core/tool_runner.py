@@ -1,6 +1,7 @@
 """Unified tool execution abstraction with logging, timing, and retries."""
 
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -8,6 +9,15 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from selectinf import get_logger
+
+
+# ANSI escape sequence pattern for stripping terminal control codes
+_ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m|\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences from text to prevent log pollution."""
+    return _ANSI_PATTERN.sub("", text)
 
 
 @dataclass
@@ -87,8 +97,8 @@ def run_tool(
             )
             elapsed = time.time() - start_time
 
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
+            stdout = _strip_ansi(result.stdout or "")
+            stderr = _strip_ansi(result.stderr or "")
             exit_code = result.returncode
 
             logger.info(f"Completed: {attempt_label} (exit={exit_code}, elapsed={elapsed:.2f}s)")
@@ -234,8 +244,8 @@ def run_pipe_tool(
 
         return ToolResult(
             success=(exit_code == 0),
-            stdout=stdout or "",
-            stderr=stderr or "",
+            stdout=_strip_ansi(stdout or ""),
+            stderr=_strip_ansi(stderr or ""),
             exit_code=exit_code,
             elapsed=elapsed,
         )

@@ -146,11 +146,16 @@ class CollectStage(PipelineStage):
     def _subfinder_scan(self, domain: str, work_path: str) -> None:
         logger.info("启动 subfinder 扫描: %s", domain)
         out = os.path.join(work_path, "subfinder.txt")
-        run_tool(
+        result = run_tool(
             ["tools/subfinder/subfinder.exe", "-d", domain, "-o", out, "-silent"],
             description="subfinder",
             timeout=self.config.collect.get("subfinder", ToolConfig()).timeout,
         )
+        if result and result.exit_code == -1:
+            logger.warning(
+                "subfinder 超时（%ds）。建议：检查网络连接，或考虑在 ~/.config/subfinder/provider-config.yaml 中配置 API key 以提高查询速度。",
+                self.config.collect.get("subfinder", ToolConfig()).timeout
+            )
 
     def _amass_scan(self, domain: str, work_path: str) -> None:
         logger.info("启动 amass 扫描: %s", domain)
@@ -258,8 +263,11 @@ class CollectStage(PipelineStage):
     def _jsfinder(self, url: str, cwd: str) -> None:
         """Run JSFinder for a single URL inside *cwd* so outputs land in work_dir."""
         logger.debug("JSFinder: %s", url)
+        # Resolve JSFinder script to absolute path so it works regardless of cwd
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        jsfinder_script = os.path.join(project_root, "tools", "jsfinder", "JSFinder.py")
         run_tool(
-            [sys.executable, "tools/jsfinder/JSFinder.py", "-u", url,
+            [sys.executable, jsfinder_script, "-u", url,
              "-ou", "url.txt", "-os", "subdomain.txt"],
             description="JSFinder",
             cwd=cwd,
@@ -272,6 +280,8 @@ class CollectStage(PipelineStage):
         visited_urls = set()
         last_size = -1
         iteration = 0
+        zero_gain_streak = 0  # 连续零增量计数器
+        ZERO_GAIN_THRESHOLD = 2  # 连续 2 次零增量则熔断
 
         while iteration < max_iterations:
             iteration += 1
@@ -281,8 +291,15 @@ class CollectStage(PipelineStage):
 
             size = os.path.getsize(domain_txt)
             if size == last_size:
-                logger.info("JSFinder 迭代完成 (共 %d 轮)", iteration)
-                break
+                zero_gain_streak += 1
+                if zero_gain_streak >= ZERO_GAIN_THRESHOLD:
+                    logger.info("JSFinder 连续 %d 次无增量，提前终止迭代 (共 %d 轮)", zero_gain_streak, iteration)
+                    break
+                logger.info("JSFinder 迭代 %d 无增量 (%d/%d)，继续观察...", iteration, zero_gain_streak, ZERO_GAIN_THRESHOLD)
+            else:
+                if zero_gain_streak > 0:
+                    logger.info("JSFinder 迭代 %d 恢复增量 (size: %d -> %d)", iteration, last_size, size)
+                zero_gain_streak = 0
             last_size = size
 
             with open(domain_txt, "r", encoding="utf-8") as f:
