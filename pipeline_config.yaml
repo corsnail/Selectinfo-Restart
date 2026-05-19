@@ -35,7 +35,7 @@ collect:
       resolvers_file: "tools/massdns/lists/resolvers.txt"
     ksubdomain:
       enabled: true
-      timeout: 300
+      timeout: 300000
       retries: 1
       extra_args: ["-b", "20M"]
     jsfinder:

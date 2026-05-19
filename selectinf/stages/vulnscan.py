@@ -251,7 +251,13 @@ class VulnScanStage(PipelineStage):
             in_path = shutil.which(base)
             if in_path:
                 return in_path, ""
-            return "", candidate
+            error_msg = (
+                f"{candidate} 不存在。"
+                f"由于 GitHub 文件大小限制，大文件二进制需要从官方下载。"
+                f"请从 https://github.com/projectdiscovery/nuclei/releases 下载 nuclei，"
+                f"解压后将 nuclei.exe 放置于 {candidate} 或添加到系统 PATH。"
+            )
+            return "", error_msg
 
         if not sys.platform.startswith("win") and not os.access(candidate, os.X_OK):
             return "", f"{candidate} 存在但无可执行权限"
