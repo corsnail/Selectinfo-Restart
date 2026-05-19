@@ -14,7 +14,7 @@ pipeline:
 collect:
   tools:
     subfinder:
-      enabled: true
+      enabled: false          # ← disabled: passive OSINT overlap with amass
       timeout: 300
       retries: 1
       extra_args: ["-silent", "-all"]
@@ -24,7 +24,7 @@ collect:
       retries: 1
       extra_args: ["-v", "-src", "-ip", "-brute", "-active"]
     oneforall:
-      enabled: true
+      enabled: false          # ← disabled: passive+brute overlap with amass+massdns
       timeout: 900
       retries: 1
     massdns:
@@ -34,7 +34,7 @@ collect:
       names_file: "tools/massdns/lists/names.txt"
       resolvers_file: "tools/massdns/lists/resolvers.txt"
     ksubdomain:
-      enabled: true
+      enabled: false          # ← disabled: brute-force overlap with massdns
       timeout: 300000
       retries: 1
       extra_args: ["-b", "20M"]

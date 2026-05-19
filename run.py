@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import argparse
 import threading
 import subprocess
 import os
@@ -332,14 +333,59 @@ def main_legacy():
     sys.exit(0)
 
 
+# ── CLI argument parser ───────────────────────────────────────────
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for selectinf."""
+    parser = argparse.ArgumentParser(
+        prog="selectinf",
+        description="Asset collection & vulnerability scanning framework",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Mode presets:
+  quick     - amass + massdns + jsfinder (fast recon, minimal overlap)
+  full      - all available tools (maximum coverage)
+  passive   - amass w/o brute-force + jsfinder (stealthy)
+  custom    - use pipeline_config.yaml exactly as-is
+
+Examples:
+  python run.py                           # Interactive prompt (backward compat)
+  python run.py -d example.com            # Quick mode scan
+  python run.py -d example.com -m full    # Full mode scan
+  python run.py -d example.com -m passive --legacy
+        """,
+    )
+    parser.add_argument(
+        "-d", "--domain",
+        dest="domain",
+        help="Target domain to scan (e.g. example.com)",
+    )
+    parser.add_argument(
+        "-m", "--mode",
+        dest="mode",
+        choices=["quick", "full", "passive", "custom"],
+        default="quick",
+        help="Scan mode preset (default: quick)",
+    )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Run legacy interactive mode even if domain is provided",
+    )
+    return parser
+
+
 # ── New main (PipelineOrchestrator thin wrapper) ──────────────────
 
 def main():
     """Entry point — thin wrapper around PipelineOrchestrator.
 
-    Mirrors the legacy CLI experience (prompt for domain, wait for key press)
-    while delegating all scanning work to the four-stage pipeline.
+    Supports both CLI arguments (-d, -m) and interactive prompt
+    for backward compatibility.
     """
+    parser = _build_parser()
+    args = parser.parse_args()
+
     logger.info("=" * 50)
     logger.info("selectinf 安全扫描框架启动")
     logger.info("=" * 50)
@@ -347,13 +393,25 @@ def main():
     # 初始化 SQLite 数据库
     init_db()
 
-    raw_input = input("请输入URL: ")
-    domain = sanitize_target(raw_input)
+    # ── Backward compatibility: no args → interactive prompt ──
+    if not args.domain or args.legacy:
+        if not args.domain:
+            raw_input = input("请输入URL: ")
+            domain = sanitize_target(raw_input)
+            mode = "custom"   # respect whatever is in YAML
+        else:
+            domain = sanitize_target(args.domain)
+            mode = args.mode
+            # Legacy mode requested but domain provided
+            logger.info("Legacy mode selected with domain: %s", domain)
+    else:
+        domain = sanitize_target(args.domain)
+        mode = args.mode
 
     # Phase 6: 使用 PipelineOrchestrator 执行四阶段流水线
-    logger.info("启动 PipelineOrchestrator ...")
+    logger.info("启动 PipelineOrchestrator (mode=%s) ...", mode)
     try:
-        orchestrator = PipelineOrchestrator()
+        orchestrator = PipelineOrchestrator(mode=mode)
         result = orchestrator.run(domain)
     except Exception as e:
         logger.error("Pipeline 执行失败: %s", e, exc_info=True)

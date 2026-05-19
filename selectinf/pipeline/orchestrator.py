@@ -19,20 +19,21 @@ logger = get_logger("pipeline.orchestrator")
 class PipelineOrchestrator:
     """Orchestrates the execution of pipeline stages for asset scanning."""
 
-    def __init__(self, config_path: str = "pipeline_config.yaml"):
+    def __init__(self, config_path: str = "pipeline_config.yaml", mode: str = None):
         """Initialize the orchestrator with configuration.
 
         Args:
             config_path: Path to the pipeline configuration file.
+            mode: Optional mode preset ("quick", "full", "passive", "custom").
         """
-        self.config = load_config(config_path)
+        self.config = load_config(config_path, mode=mode)
         self.stages = [
             ("collect", CollectStage(self.config)),
             ("fingerprint", FingerprintStage(self.config)),
             ("vulnscan", VulnScanStage(self.config)),
             ("ai_analysis", AIAnalysisStage(self.config)),
         ]
-        logger.debug("PipelineOrchestrator initialized with config: %s", config_path)
+        logger.debug("PipelineOrchestrator initialized with config: %s, mode=%s", config_path, mode or "custom")
 
     def run(self, target: str) -> dict:
         """Run the full pipeline for a given target.
